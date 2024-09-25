@@ -1,0 +1,20 @@
+[package]
+name = "proxy-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+aya = "0.12"
+aya-log = "0.2"
+clap = { version = "4.5", features = ["derive"] }
+proxy-common = { path = "../proxy-common", features = ["user"] }
+anyhow = "1.0"
+env_logger = "0.11"
+libc = "0.2"
+log = "0.4"
+tokio = { version = "1.40", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+
+[[bin]]
+name = "proxy-test"
+path = "src/proxy_main.rs"

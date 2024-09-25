@@ -6,8 +6,9 @@ edition = "2021"
 [dependencies]
 aya-ebpf = "0.1.0"
 aya-log-ebpf = "0.1.0"
+network-types = "0.0.7"
 proxy-common = { path = "../proxy-common" }
-network-types = "0.0.6"
+seahash = "4.1"
 
 [[bin]]
 name = "proxy"

@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 clap = { version = "4.1", features = ["derive"] }
+
+[[bin]]
+name = "proxy"
+path = "src/xtask_main.rs"

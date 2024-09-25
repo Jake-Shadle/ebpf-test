@@ -84,6 +84,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "network-types"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e82e9f64c09f56aa7c80c3fa087997bd99a913f91d9c74d36cf5fd75dd5773e6"
+
+[[package]]
 name = "num_enum"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -145,7 +151,9 @@ version = "0.1.0"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
+ "network-types",
  "proxy-common",
+ "seahash",
 ]
 
 [[package]]
@@ -162,6 +170,12 @@ name = "rustversion"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "syn"
