@@ -8,7 +8,6 @@ aya-ebpf = "0.1.0"
 aya-log-ebpf = "0.1.0"
 network-types = "0.0.7"
 proxy-common = { path = "../proxy-common" }
-#seahash = "4.1"
 
 [[bin]]
 name = "proxy"

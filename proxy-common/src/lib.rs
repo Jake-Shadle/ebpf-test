@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod fnv;
+
 /// Network byte order IP address
 #[derive(Copy, Clone)]
 #[repr(C)]

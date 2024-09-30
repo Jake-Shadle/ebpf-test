@@ -6,7 +6,7 @@ const INITIAL_STATE: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0100_0000_01b3;
 
 #[inline]
-pub(crate) fn hash(bytes: &[u8]) -> u64 {
+pub fn hash(bytes: &[u8]) -> u64 {
     let mut hash = INITIAL_STATE;
     let mut i = 0;
     while i < bytes.len() {
@@ -18,7 +18,7 @@ pub(crate) fn hash(bytes: &[u8]) -> u64 {
 }
 
 #[inline]
-pub(crate) fn hasher() -> impl core::hash::Hasher {
+pub fn hasher() -> impl core::hash::Hasher {
     pub struct FnvHasher(u64);
 
     impl core::hash::Hasher for FnvHasher {
