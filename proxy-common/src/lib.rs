@@ -1,7 +1,7 @@
 #![no_std]
 
 /// Network byte order IP address
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 #[repr(C)]
 pub enum IpAddr {
     V4(u32),
@@ -9,7 +9,7 @@ pub enum IpAddr {
 }
 
 /// Network byte order socket address
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 #[repr(C)]
 pub struct SockAddr {
     pub ip: IpAddr,
@@ -34,7 +34,12 @@ impl core::hash::Hash for SockAddr {
 
 /// The eBPF compiler will recognize the use of bpf_spin_lock, which allows the
 /// user space code to use `BPF_F_LOCK` to update individual elements atomically
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct SockAddrEntry {
     //lock: bindings::bpf_spin_lock,
     pub addr: SockAddr,
 }
+
+#[cfg(feature = "userspace")]
+unsafe impl aya::Pod for SockAddrEntry {}

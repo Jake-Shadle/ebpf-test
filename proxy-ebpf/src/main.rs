@@ -23,6 +23,11 @@ use network_types::{
     udp::UdpHdr,
 };
 use proxy_common::{IpAddr, SockAddr, SockAddrEntry};
+mod fnv;
+
+use fnv::{hash, hasher};
+// mod map_of_map;
+// use map_of_map::HashOfMaps;
 
 #[no_mangle]
 static TOKEN_SIZE: i32 = 0;
@@ -55,21 +60,26 @@ impl IpHdr {
 }
 
 /// Maps a hash of a packet token to server endpoint
-#[map(name = "TARGET_ENDPOINTS")]
+#[map]
 static TARGET_ENDPOINTS: HashMap<u64, SockAddrEntry> =
-    HashMap::<u64, SockAddrEntry>::with_max_entries(100000, 0);
+    HashMap::<u64, SockAddrEntry>::with_max_entries(10, 0);
 /// Maps a hash of a client endpoint and server endpoint to a port number
 /// to use as the source port for sending the packet to a server
-#[map(name = "PAIR_TO_PORT")]
-static PAIR_TO_PORT: HashMap<u64, u16> = HashMap::<u64, u16>::with_max_entries(100000, 0);
+#[map]
+static PAIR_TO_PORT: HashMap<u64, u16> = HashMap::<u64, u16>::with_max_entries(10, 0);
 /// Maps a hash of a server endpoint and destination port to a client endpoint
-#[map(name = "SERVER_TO_CLIENT")]
-static SERVER_TO_CLIENT: HashMap<u64, SockAddr> =
-    HashMap::<u64, SockAddr>::with_max_entries(100000, 0);
+#[map]
+static SERVER_TO_CLIENT: HashMap<u64, SockAddr> = HashMap::<u64, SockAddr>::with_max_entries(10, 0);
 /// Maps a hash of a server address to a queue of available ports
-#[map(name = "SERVER_TO_PORT")]
-static SERVER_TO_PORT: HashMap<u64, Queue<u16>> =
-    HashMap::<u64, Queue<u16>>::with_max_entries(100000, 0);
+// #[map]
+// static SERVER_TO_PORT: HashMap<u64, Queue<u16>> =
+//     HashMap::<u64, Queue<u16>>::with_max_entries(10, 0);
+
+// #[map]
+// static SERVER_TO_PORT: HashOfMaps<u64, Queue<u16>> =
+//     HashOfMaps::<u64, Queue<u16>>::with_max_entries(10);
+#[map]
+static PORT_QUEUE: Queue<u16> = Queue::with_max_entries(1000, 0);
 
 /// Helper function to get a pointer to a type at the specified offset from
 /// the start of the context.
@@ -151,7 +161,7 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
                 return Err(());
             }
 
-            seahash::hash(core::slice::from_raw_parts(
+            hash(core::slice::from_raw_parts(
                 token_start as *const u8,
                 TOKEN_SIZE as usize,
             ))
@@ -170,7 +180,7 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
         };
 
         let pair_key = {
-            let mut h = seahash::SeaHasher::new();
+            let mut h = hasher();
             src_addr.hash(&mut h);
             dr.hash(&mut h);
             h.finish()
@@ -181,30 +191,34 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
         let src_port = if let Some(entry) = unsafe { PAIR_TO_PORT.get(&pair_key) } {
             *entry
         } else {
-            let server_hash = {
-                let mut h = seahash::SeaHasher::new();
-                dr.hash(&mut h);
-                h.finish()
-            };
+            // let server_hash = {
+            //     let mut h = seahash::SeaHasher::new();
+            //     dr.hash(&mut h);
+            //     h.finish()
+            // };
 
             // Otherwise we need to assign an unassigned port to this pair. Since
             // we aren't actually using ports for anything other than knowing which
             // client to send server packets back to they only need to be unique per
             // server
-            let mut new_port = if let Some(queue) = unsafe { SERVER_TO_PORT.get(&server_hash) } {
-                let Some(np) = queue.pop() else {
-                    // TODO: push no available port error with token to error ring buf
-                    return Err(());
-                };
+            // let mut new_port = if let Some(queue) = unsafe { SERVER_TO_PORT.get(&server_hash) } {
+            //     let Some(np) = queue.pop() else {
+            //         // TODO: push no available port error with token to error ring buf
+            //         return Err(());
+            //     };
 
-                np
-            } else {
-                // TODO: push not found error with token to error ring buf
+            //     np
+            // } else {
+            //     // TODO: push not found error with token to error ring buf
+            //     return Err(());
+            // };
+            let Some(mut new_port) = PORT_QUEUE.pop() else {
+                // TODO: push no available port error with token to error ring buf
                 return Err(());
             };
 
             let server_port_hash = {
-                let mut h = seahash::SeaHasher::new();
+                let mut h = hasher();
                 dr.hash(&mut h);
                 h.write_u16(new_port);
                 h.finish()
@@ -224,12 +238,13 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
                     return Err(());
                 }
             } else {
-                // This means we got beat by another CPU so just query what port it got assigned
-                // and give back the port we were going to assign
-                if let Some(queue) = unsafe { SERVER_TO_PORT.get(&server_hash) } {
-                    // If the queue is full that is up the host program to fixup
-                    let _ = queue.push(&new_port, 0);
-                }
+                // This means we got beat by a request on another CPU so just
+                // query what port it got assigned and give back the port we were going to assign
+                // if let Some(queue) = unsafe { SERVER_TO_PORT.get(&server_hash) } {
+                //     // If the queue is full that is up the host program to fixup
+                //     let _ = queue.push(&new_port, 0);
+                // }
+                let _ = PORT_QUEUE.push(&new_port, 0);
 
                 let Some(p) = (unsafe { PAIR_TO_PORT.get(&pair_key) }) else {
                     // TODO: push error
@@ -248,7 +263,7 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
         // from a server to a client, so try to lookup the client endpoint from
         // the unique source + dest port pair
         let server_port_hash = {
-            let mut h = seahash::SeaHasher::new();
+            let mut h = hasher();
             src_addr.hash(&mut h);
             h.write_u16(port);
             h.finish()
@@ -391,7 +406,7 @@ unsafe fn rewrite_ip_hdr(ctx: &XdpContext, dest: &IpAddr, hdr: IpHdr) -> Result<
             hdr.dst_addr.in6_u.u6_addr8 = *dest_addr;
         }
         (IpAddr::V4(dest_addr), IpHdr::V6(hdr)) => {
-            v6_to_v4(ctx, *dest_addr, hdr)?;
+            //v6_to_v4(ctx, *dest_addr, hdr)?;
         }
         (IpAddr::V6(dest_addr), IpHdr::V4(hdr)) => {
             v4_to_v6(ctx, dest_addr, hdr)?;
@@ -517,29 +532,32 @@ unsafe fn change_proto(ctx: &XdpContext, proto: EtherType) -> Result<(), i64> {
     }
 
     if len_diff > 0 {
-        let data = ctx.data() as i32;
-        let data_end = ctx.data_end() as i32;
+        let data = ctx.data() as usize;
+        let data_end = ctx.data_end() as usize;
 
-        if data + MOVE_LEN + len_diff <= data_end {
-            core::intrinsics::copy(
-                (data + len_diff) as *const u8,
-                data as *mut u8,
-                MOVE_LEN as usize,
-            );
+        let original_start = data + len_diff as usize;
+
+        if original_start + MOVE_LEN as usize <= data_end {
+            // there is a bug somewhere (aya, kernel, llvm) where _this_
+            // core::intrinsics::copy is not found when loading the bytecode, so
+            // just do a hand-written copy
+            *(data as *mut u64) = *((original_start) as *const u64);
+            *((data + 8) as *mut u32) = *((original_start + 8) as *const u32);
+            *((data + 12) as *mut u16) = proto as u16;
         } else {
             return Err(EFAULT);
         }
-    }
-
-    // Set the ether type
-    let ret = funcs::bpf_xdp_store_bytes(
-        ctx.ctx,
-        (EthHdr::LEN - core::mem::size_of::<EtherType>()) as u32,
-        &proto as *const EtherType as *mut u16 as *mut _,
-        core::mem::size_of::<EtherType>() as u32,
-    );
-    if ret != 0 {
-        return Err(-ret);
+    } else {
+        // Set the ether type
+        let ret = funcs::bpf_xdp_store_bytes(
+            ctx.ctx,
+            (EthHdr::LEN - core::mem::size_of::<EtherType>()) as u32,
+            &proto as *const EtherType as *mut u16 as *mut _,
+            core::mem::size_of::<EtherType>() as u32,
+        );
+        if ret != 0 {
+            return Err(-ret);
+        }
     }
 
     Ok(())
