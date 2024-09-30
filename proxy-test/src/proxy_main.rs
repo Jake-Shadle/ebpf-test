@@ -340,6 +340,7 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
                     "{:?} failed to send buffer to {remote_addr:?} - {err:#}",
                     socket.local_addr().unwrap()
                 );
+                continue;
             }
 
             match tokio::time::timeout(
