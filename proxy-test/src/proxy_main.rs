@@ -310,14 +310,14 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
     for proxy in cfg.tester.proxy {
         if proxy.addr.is_ipv4() {
             clients.push((
-                tokio::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
                     .await
                     .context("failed to bind ipv4 client socket")?,
                 proxy.addr,
             ));
         } else {
             clients.push((
-                tokio::net::UdpSocket::bind((std::net::Ipv6Addr::LOCALHOST, 0))
+                tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, 0))
                     .await
                     .context("failed to bind ipv6 client socket")?,
                 proxy.addr,
@@ -335,7 +335,7 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
 
         for (socket, remote_addr) in &clients {
             send_buf[..4].copy_from_slice(&counter.to_le_bytes());
-            if let Err(err) = socket.send_to(dbg!(&send_buf), remote_addr).await {
+            if let Err(err) = socket.send_to(&send_buf, remote_addr).await {
                 log::error!(
                     "{:?} failed to send buffer to {remote_addr:?} - {err:#}",
                     socket.local_addr().unwrap()
