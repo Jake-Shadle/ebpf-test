@@ -335,7 +335,7 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
 
         for (socket, remote_addr) in &clients {
             send_buf[..4].copy_from_slice(&counter.to_le_bytes());
-            if let Err(err) = socket.send_to(&send_buf, remote_addr).await {
+            if let Err(err) = socket.send_to(dbg!(&send_buf), remote_addr).await {
                 log::error!(
                     "{:?} failed to send buffer to {remote_addr:?} - {err:#}",
                     socket.local_addr().unwrap()
