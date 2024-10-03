@@ -6,3 +6,6 @@ members = [
     "proxy-common",
     "proxy-test",
 ]
+
+[patch.crates-io]
+aya = { path = "../temp-clones/aya/aya" }
