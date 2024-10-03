@@ -173,6 +173,9 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
                         .recv_from(&mut buf)
                         .await
                         .with_context(|| format!("{addr} failed to recv"))?;
+
+                    log::info!("echoing {read} bytes to {addr}");
+
                     server
                         .send_to(&buf[..read], addr)
                         .await
@@ -329,6 +332,8 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
         server.token(&mut send_buf[4..]);
 
         for (socket, remote_addr) in &clients {
+            log::info!("sending {counter} packet to {remote_addr}");
+
             send_buf[..4].copy_from_slice(&counter.to_le_bytes());
             if let Err(err) = socket.send_to(&send_buf, remote_addr).await {
                 log::error!(
@@ -366,6 +371,8 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
                                 &send_buf[..4]
                             );
                         }
+
+                        log::info!("received {counter} packet from {addr}");
                     }
                     Err(err) => {
                         log::error!(
