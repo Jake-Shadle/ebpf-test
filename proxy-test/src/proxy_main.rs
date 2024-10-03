@@ -140,12 +140,12 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let ipv4 = local_ip_address::local_ip().context("failed to get ipv4 address")?;
-    let ipv6 = local_ipv6().context("failed to get ipv6 address")?;
+    let ipv4 = dbg!(local_ip_address::local_ip().context("failed to get ipv4 address")?);
+    let ipv6 = dbg!(local_ipv6().context("failed to get ipv6 address")?);
 
     let mut servers = Vec::new();
     for ep in &cfg.servers {
-        let ip = ep.addr.ip();
+        let ip = dbg!(ep.addr.ip());
         if ip != ipv4 && ip != ipv6 {
             continue;
         }
