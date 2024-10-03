@@ -15,7 +15,7 @@ local-ip-address = "0.6"
 log = "0.4"
 proxy-common = { path = "../proxy-common", features = ["userspace"] }
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.40", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time"] }
+tokio = { version = "1.40", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync", "time"] }
 toml = "0.8"
 
 [[bin]]

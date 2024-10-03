@@ -159,7 +159,8 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
         servers.push(socket.with_context(|| format!("unable to bind {:?}", ep.addr))?);
     }
 
-    Ok(tokio::spawn(async move {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let jh = tokio::spawn(async move {
         let mut set = tokio::task::JoinSet::<anyhow::Result<()>>::new();
 
         for server in servers {
@@ -184,8 +185,14 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
             });
         }
 
+        tx.send(()).expect("receiver dropped");
+
         set.join_all().await;
-    }))
+    });
+
+    rx.await.expect("sender dropped");
+
+    Ok(jh)
 }
 
 async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
