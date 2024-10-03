@@ -1,6 +1,5 @@
 use anyhow::Context as _;
 use aya::programs::{Xdp, XdpFlags};
-use aya_log::BpfLogger;
 use clap::Parser;
 use serde::{Deserialize, Deserializer};
 use std::net::{Ipv6Addr, SocketAddr};
@@ -152,9 +151,9 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
         }
 
         let socket = if ip.is_ipv4() {
-            tokio::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, ep.addr.port())).await
+            tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, ep.addr.port())).await
         } else {
-            tokio::net::UdpSocket::bind((std::net::Ipv6Addr::LOCALHOST, ep.addr.port())).await
+            tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, ep.addr.port())).await
         };
 
         servers.push(socket.with_context(|| format!("unable to bind {:?}", ep.addr))?);
@@ -200,14 +199,14 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
         log::debug!("remove limit on locked memory failed, ret is: {ret}");
     }
 
-    let _ipv4 = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, cfg.proxy.port))
+    let _ipv4 = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, cfg.proxy.port))
         .context("failed to bind ipv4 socket");
-    let _ipv6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::LOCALHOST, cfg.proxy.port))
+    let _ipv6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, cfg.proxy.port))
         .context("failed to bind ipv6 socket");
 
-    let mut loader = aya::BpfLoader::new();
+    let mut loader = aya::EbpfLoader::new();
     //loader.btf(aya::Btf::from_sys_fs().ok().as_ref());
-    let tok_size = cfg.token_length as i32;
+    let tok_size = cfg.token_length as u64;
     loader.set_global("TOKEN_SIZE", &tok_size, true);
 
     let port = u16::to_be(cfg.proxy.port);
@@ -223,12 +222,6 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     let IpAddr::V6(v6) = ipv6 else { unreachable!() };
     let ipv6 = v6.octets();
     loader.set_global("SRC_IPV6", &ipv6, true);
-
-    // #[cfg(debug_assertions)]
-    // const PROG: &[u8] = include_bytes_aligned!("../../target/bpfel-unknown-none/debug/proxy");
-
-    // #[cfg(not(debug_assertions))]
-    // const PROG: &[u8] = include_bytes_aligned!("../../target/bpfel-unknown-none/release/proxy");
 
     let path = if cfg!(debug_assertions) {
         "target/bpfel-unknown-none/debug/proxy"
@@ -251,6 +244,9 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     for ep in &cfg.servers {
         ep.token(&mut tok);
         let tok_hash = proxy_common::fnv::hash(&tok);
+
+        log::info!("hash for {}: {tok_hash}", ep.addr);
+
         ep_map
             .insert(
                 tok_hash,
@@ -281,14 +277,13 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
             .with_context(|| format!("failed to push port: {port}"))?;
     }
 
-    if let Err(e) = BpfLogger::init(&mut bpf) {
+    if let Err(e) = aya_log::BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         log::warn!("failed to initialize eBPF logger: {e}");
     }
 
     let program: &mut Xdp = bpf.program_mut("proxy").unwrap().try_into()?;
     program.load()?;
-    //program.attach(&ep_map_fd)?;
     program.attach(&cfg.proxy.iface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
