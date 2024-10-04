@@ -88,7 +88,7 @@ fn local_ipv6() -> anyhow::Result<std::net::IpAddr> {
         let iface_name = iface_name.trim();
 
         if iface_name == "lo" || iface_name.starts_with("tailscale") {
-            log::debug!("skipping interface {iface_name}");
+            tracing::debug!("skipping interface {iface_name}");
             continue;
         }
 
@@ -96,7 +96,7 @@ fn local_ipv6() -> anyhow::Result<std::net::IpAddr> {
             continue;
         };
         if addr.len() != 32 {
-            log::debug!("skipping malformed ipv6 address {addr} for {iface_name}");
+            tracing::debug!("skipping malformed ipv6 address {addr} for {iface_name}");
             continue;
         }
 
@@ -116,9 +116,21 @@ fn local_ipv6() -> anyhow::Result<std::net::IpAddr> {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    if let Err(err) = real_main().await {
+        tracing::error!("{err:#}");
+    }
+
+    Ok(())
+}
+
+async fn real_main() -> Result<(), anyhow::Error> {
+    use tracing_subscriber::prelude::*;
     let opt = Opt::parse();
 
-    env_logger::init();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     let cfg: Config = {
         let toml = std::fs::read_to_string("config.toml").context("failed to read config.toml")?;
@@ -135,39 +147,44 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     servers.abort();
-
     Ok(())
 }
 
 async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let ipv4 = dbg!(local_ip_address::local_ip().context("failed to get ipv4 address")?);
-    let ipv6 = dbg!(local_ipv6().context("failed to get ipv6 address")?);
+    let ipv4 = local_ip_address::local_ip().context("failed to get ipv4 address")?;
+    let ipv6 = local_ipv6().context("failed to get ipv6 address")?;
 
     let mut servers = Vec::new();
     for ep in &cfg.servers {
         let ip = dbg!(ep.addr.ip());
         if ip != ipv4 && ip != ipv6 {
+            tracing::debug!("address mismatch {ip}");
             continue;
         }
 
-        let socket = if ip.is_ipv4() {
+        let res = if dbg!(ip).is_ipv4() {
             tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, ep.addr.port())).await
         } else {
             tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, ep.addr.port())).await
         };
 
-        servers.push(socket.with_context(|| format!("unable to bind {:?}", ep.addr))?);
+        let socket = res.with_context(|| format!("unable to bind {:?}", ep.addr))?;
+        tracing::info!("bound {}", socket.local_addr().unwrap());
+        servers.push(socket);
     }
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+    let len = servers.len();
     let jh = tokio::spawn(async move {
         let mut set = tokio::task::JoinSet::<anyhow::Result<()>>::new();
 
         for server in servers {
+            let tx = tx.clone();
             set.spawn(async move {
                 let mut buf = [0u8; 128];
                 let addr = server.local_addr().unwrap();
-                log::info!("UDP echo running {addr}");
+                tracing::info!("UDP echo running {addr}");
+                tx.send(()).await.expect("rx dropped");
 
                 loop {
                     let (read, addr) = server
@@ -175,7 +192,7 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
                         .await
                         .with_context(|| format!("{addr} failed to recv"))?;
 
-                    log::info!("echoing {read} bytes to {addr}");
+                    tracing::info!("echoing {read} bytes to {addr}");
 
                     server
                         .send_to(&buf[..read], addr)
@@ -185,12 +202,12 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
             });
         }
 
-        tx.send(()).expect("receiver dropped");
-
         set.join_all().await;
     });
 
-    rx.await.expect("sender dropped");
+    for _ in 0..len {
+        rx.recv().await.expect("senders dropped");
+    }
 
     Ok(jh)
 }
@@ -206,7 +223,7 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     };
     let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
     if ret != 0 {
-        log::debug!("remove limit on locked memory failed, ret is: {ret}");
+        tracing::debug!("remove limit on locked memory failed, ret is: {ret}");
     }
 
     let _ipv4 = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, cfg.proxy.port))
@@ -255,7 +272,7 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
         ep.token(&mut tok);
         let tok_hash = proxy_common::fnv::hash(&tok);
 
-        log::info!("hash for {}: {tok_hash}", ep.addr);
+        tracing::info!("hash for {}: {tok_hash}", ep.addr);
 
         ep_map
             .insert(
@@ -283,13 +300,13 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
 
     for port in [7778u16, 7779, 9002, 9003] {
         q_map
-            .push(7778u16, 0)
+            .push(u16::to_be(port), 0)
             .with_context(|| format!("failed to push port: {port}"))?;
     }
 
     if let Err(e) = aya_log::BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
-        log::warn!("failed to initialize eBPF logger: {e}");
+        tracing::warn!("failed to initialize eBPF logger: {e}");
     }
 
     let program: &mut Xdp = bpf.program_mut("proxy").unwrap().try_into()?;
@@ -297,9 +314,9 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     program.attach(&cfg.proxy.iface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
-    log::info!("Waiting for Ctrl-C...");
+    tracing::info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
-    log::info!("Exiting proxy...");
+    tracing::info!("Exiting proxy...");
 
     Ok(())
 }
@@ -339,11 +356,11 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
         server.token(&mut send_buf[4..]);
 
         for (socket, remote_addr) in &clients {
-            log::info!("sending {counter} packet to {remote_addr}");
+            tracing::info!("sending {counter} packet to {remote_addr}");
 
             send_buf[..4].copy_from_slice(&counter.to_le_bytes());
             if let Err(err) = socket.send_to(&send_buf, remote_addr).await {
-                log::error!(
+                tracing::error!(
                     "{:?} failed to send buffer to {remote_addr:?} - {err:#}",
                     socket.local_addr().unwrap()
                 );
@@ -359,19 +376,19 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
                 Ok(res) => match res {
                     Ok((received, addr)) => {
                         if addr != *remote_addr {
-                            log::error!(
+                            tracing::error!(
                                 "{:?} received a packet from an invalid remote peer {addr:?}",
                                 socket.local_addr().unwrap()
                             );
                         }
 
                         if received != 4 {
-                            log::error!(
+                            tracing::error!(
                                 "{:?} received packet of invalid length {received}",
                                 socket.local_addr().unwrap()
                             );
                         } else if &recv_buf[..4] != &send_buf[..4] {
-                            log::error!(
+                            tracing::error!(
                                 "{:?} received invalid packet {:?}, expected {:?}",
                                 socket.local_addr().unwrap(),
                                 &recv_buf[..4],
@@ -379,17 +396,17 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
                             );
                         }
 
-                        log::info!("received {counter} packet from {addr}");
+                        tracing::info!("received {counter} packet from {addr}");
                     }
                     Err(err) => {
-                        log::error!(
+                        tracing::error!(
                             "recv_from failed for {:?} - {err:#}",
                             socket.local_addr().unwrap()
                         );
                     }
                 },
                 Err(_) => {
-                    log::error!("timed out waiting for reply {counter} from {remote_addr:?}");
+                    tracing::error!("timed out waiting for reply {counter} from {remote_addr:?}");
                 }
             }
 
@@ -397,7 +414,7 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
         }
     }
 
-    log::info!("Exiting tester...");
+    tracing::info!("Exiting tester...");
 
     Ok(())
 }
