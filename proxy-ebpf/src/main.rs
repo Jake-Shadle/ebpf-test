@@ -15,32 +15,32 @@ use aya_ebpf::{
     maps::{HashMap, Queue},
     programs::XdpContext,
 };
-use aya_log_ebpf::info;
+use aya_log_ebpf as log;
 use core::hash::{Hash as _, Hasher as _};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{IpProto, Ipv4Hdr, Ipv6Hdr},
     udp::UdpHdr,
 };
-use proxy_common::{IpAddr, SockAddr, SockAddrEntry};
-mod fnv;
-
-use fnv::{hash, hasher};
-// mod map_of_map;
-// use map_of_map::HashOfMaps;
+use proxy_common::{
+    fnv::{hash, hasher},
+    IpAddr, SockAddr, SockAddrEntry,
+};
 
 #[no_mangle]
-static TOKEN_SIZE: i32 = 0;
+static TOKEN_SIZE: usize = 7;
 
 /// The port that clients send packets to, to be routed to the appropriate agent. Network order.
 #[no_mangle]
-static EXTERNAL_PORT: u16 = 0;
+static EXTERNAL_PORT: u16 = u16::to_be(7777);
 /// The IPv6 address for this host. Network order.
 #[no_mangle]
-static SRC_IPV6: [u8; 16] = [0u8; 16];
+static SRC_IPV6: [u8; 16] = [
+    254, 128, 0, 0, 0, 0, 0, 0, 153, 240, 13, 207, 75, 227, 210, 90,
+];
 /// The IPv4 address for this host. Network order.
 #[no_mangle]
-static SRC_IPV4: u32 = 0;
+static SRC_IPV4: u32 = u32::from_ne_bytes([192, 168, 1, 199]);
 
 type Action = xdp_action::Type;
 
@@ -120,7 +120,9 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
                         udp_hdr,
                     )
                 },
-                _ => return Err(()),
+                _ => {
+                    return Err(());
+                }
             }
         }
         EtherType::Ipv6 => {
@@ -129,6 +131,7 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
             // Note this means that we ignore packets that have extensions
             match unsafe { (*ipv6hdr).next_hdr } {
                 IpProto::Udp => unsafe {
+                    log::info!(&ctx, "mmk...");
                     let udp_hdr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv6Hdr::LEN)?;
 
                     (
@@ -140,41 +143,138 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
                         udp_hdr,
                     )
                 },
-                _ => return Err(()),
+                _ => {
+                    return Err(());
+                }
             }
         }
-        _ => return Ok(xdp_action::XDP_PASS),
+        _ => {
+            return Ok(xdp_action::XDP_PASS);
+        }
     };
 
     let (port, payload_len) = unsafe { ((*udp_hdr).dest, u16::from_be((*udp_hdr).len)) };
+
+    const CLIENT4: u32 = u32::from_ne_bytes([192, 168, 1, 173]);
+    const CLIENT6: [u8; 16] = [
+        254, 128, 0, 0, 0, 0, 0, 0, 193, 214, 100, 146, 90, 1, 49, 76,
+    ];
+
+    match src_addr.ip {
+        IpAddr::V4(v4) => {
+            if v4 == CLIENT4 {
+                log::info!(
+                    &ctx,
+                    "received packet from {:i}:{} to {}",
+                    u32::from_be(v4),
+                    u16::from_be(src_addr.port),
+                    u16::from_be(port),
+                );
+            }
+        }
+        IpAddr::V6(v6) => {
+            if v6 == CLIENT6 {
+                log::info!(
+                    &ctx,
+                    "received packet from {:i}:{} to {}",
+                    v6,
+                    u16::from_be(src_addr.port),
+                    u16::from_be(port),
+                );
+            }
+        }
+    }
 
     // If packet is sent to the external port, it's a client trying to reach a
     // server behind the proxy, in which case we determine which server based on
     // the token at the end of the packet
     let (dest_route, src_port) = if port == EXTERNAL_PORT {
+        log::info!(&ctx, "got client packet: {} {}", port, ip_hdr.len(),);
+
         // Read and hash the token
         let token_hash = unsafe {
-            // Just ensure the token is not longer than the actual data portion of the datagram
-            let data_start = EthHdr::LEN + ip_hdr.len() + core::mem::size_of::<UdpHdr>();
-            let token_start = ctx.data_end() - TOKEN_SIZE as usize;
-            if token_start < data_start {
+            // Just ensure the token is not longer than the actual data portion
+            // of the datagram, but note the eBPF verifier doesn't like it when
+            // we do pointer arithmetic from the end of the packet, and we must
+            // verify that the dynamic payload_len obtained from the UDP header
+            // does not overflow 64k
+            // let token_offset = EthHdr::LEN as isize + ip_hdr.len() as isize + payload_len as isize
+            //     - TOKEN_SIZE as isize;
+            // if token_offset > u16::MAX as isize || token_offset < 0 {
+            //     return Err(());
+            // }
+
+            // let data_start = ctx.data();
+
+            // let token_start = data_start + token_offset as usize;
+            // let token_end = token_start + TOKEN_SIZE;
+            // if token_start < data_start
+            //     || token_end > ctx.data_end()
+            //     || token_start > ctx.data_end()
+            //     || token_end < data_start
+            // {
+            //     return Err(());
+            // }
+
+            // let pkt_size = ;
+
+            // // if TOKEN_SIZE >= pkt_size || pkt_size > u16::MAX as usize {
+            // //     return Err(());
+            // // }
+
+            // let token_offset = (pkt_size - TOKEN_SIZE) as isize;
+            // if token_offset >= u16::MAX as isize || token_offset <= 0 {
+            //     return Err(());
+            // }
+
+            // let token_offset = token_offset as usize;
+
+            // let start = ctx.data();
+            // let end = ctx.data_end();
+
+            // if start + token_offset + TOKEN_SIZE > end {
+            //     return Err(());
+            // }
+
+            // let (start, end) = buf_at(
+            //     &ctx,
+            //     (EthHdr::LEN + ip_hdr.len() + payload_len as usize - TOKEN_SIZE) as _,
+            //     TOKEN_SIZE as _,
+            // )?;
+
+            let mut slice = [0u8; TOKEN_SIZE];
+
+            if funcs::bpf_xdp_load_bytes(
+                ctx.ctx,
+                (EthHdr::LEN + ip_hdr.len() + payload_len as usize - TOKEN_SIZE) as u32,
+                &mut slice as *mut u8 as *mut _,
+                TOKEN_SIZE as _,
+            ) != 0
+            {
                 return Err(());
             }
 
-            hash(core::slice::from_raw_parts(
-                token_start as *const u8,
-                TOKEN_SIZE as usize,
-            ))
+            hash(&slice)
+
+            //hash(token_slice)
+            //hash_ptr(start, end)
+
+            // hash(core::slice::from_raw_parts(
+            //     (start + token_offset) as *const u8,
+            //     TOKEN_SIZE,
+            // ))
         };
 
         let dr = unsafe {
             if let Some(entry) = TARGET_ENDPOINTS.get(&token_hash) {
                 //funcs::bpf_spin_lock(&entry.lock as *const _ as *mut _);
                 let dr = entry.addr.clone();
+                log::info!(&ctx, "got endpoint",);
                 //funcs::bpf_spin_unlock(&entry.lock as *const _ as *mut _);
                 dr
             } else {
                 // TODO: push not found error with token to error ring buf
+                log::info!(&ctx, "failed to find endpoint: {}", token_hash,);
                 return Err(());
             }
         };
@@ -227,6 +327,8 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
             if unsafe { PAIR_TO_PORT.insert(&pair_key, &new_port, bindings::BPF_NOEXIST as _) }
                 .is_ok()
             {
+                log::info!(&ctx, "assigned server port hash {}", server_port_hash,);
+
                 if let Err(err) = unsafe {
                     SERVER_TO_CLIENT.insert(
                         &server_port_hash,
@@ -269,6 +371,33 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
             h.finish()
         };
 
+        match src_addr.ip {
+            IpAddr::V4(v4) => {
+                if v4 == CLIENT4 {
+                    log::info!(
+                        &ctx,
+                        "hash for {:i}:{} to {} {}",
+                        u32::from_be(v4),
+                        u16::from_be(src_addr.port),
+                        u16::from_be(port),
+                        server_port_hash,
+                    );
+                }
+            }
+            IpAddr::V6(v6) => {
+                if v6 == CLIENT6 {
+                    log::info!(
+                        &ctx,
+                        "hash for {:i}:{} to {} {}",
+                        v6,
+                        u16::from_be(src_addr.port),
+                        u16::from_be(port),
+                        server_port_hash,
+                    );
+                }
+            }
+        }
+
         let dr = if let Some(client_addr) = unsafe { SERVER_TO_CLIENT.get(&server_port_hash) } {
             client_addr.clone()
         } else {
@@ -293,11 +422,32 @@ fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
             src_port,
             payload_len,
             if port == EXTERNAL_PORT {
-                -TOKEN_SIZE
+                -(TOKEN_SIZE as i32)
             } else {
                 0
             },
         )?;
+    }
+
+    match dest_route.ip {
+        IpAddr::V4(v4) => {
+            log::info!(
+                &ctx,
+                "retransmitting packet to {:i}:{} from {}",
+                u32::from_be(v4),
+                u16::from_be(dest_route.port),
+                u16::from_be(src_port),
+            );
+        }
+        IpAddr::V6(v6) => {
+            log::info!(
+                &ctx,
+                "retransmitting packet to {:i}:{} from {}",
+                v6,
+                u16::from_be(dest_route.port),
+                u16::from_be(src_port),
+            );
+        }
     }
 
     Ok(xdp_action::XDP_TX)
@@ -415,88 +565,6 @@ unsafe fn rewrite_ip_hdr(ctx: &XdpContext, dest: &IpAddr, hdr: IpHdr) -> Result<
 
     Ok(())
 }
-
-// pub struct Ipv4Hdr {
-//     pub _bitfield_align_1: [u8; 0],
-//     pub _bitfield_1: BitfieldUnit<[u8; 1]>,
-//     pub tos: u8,
-//     pub tot_len: u16,
-//     pub id: u16,
-//     pub frag_off: u16,
-//     pub ttl: u8,
-//     pub proto: IpProto,
-//     pub check: u16,
-//     pub src_addr: u32,
-//     pub dst_addr: u32,
-// }
-
-// pub struct Ipv6Hdr {
-//     pub _bitfield_align_1: [u8; 0],
-//     pub _bitfield_1: BitfieldUnit<[u8; 1]>,
-//     pub flow_label: [u8; 3],
-//     pub payload_len: u16,
-//     pub next_hdr: IpProto,
-//     pub hop_limit: u8,
-//     pub src_addr: in6_addr,
-//     pub dst_addr: in6_addr,
-// }
-
-// IPV4
-// 0                   1                   2                   3
-// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// ┌───────┬───────┬───────────────┬───────────────────────────────┐
-// │Version│  IHL  │Type of Service│          Total Length         │
-// ├───────┴───────┴───────────────┼─────┬─────────────────────────┤
-// │         Identification        │Flags│     Fragment Offset     │
-// ├───────────────┬───────────────┼─────┴─────────────────────────┤
-// │  Time to Live │    Protocol   │        Header Checksum        │
-// ├───────────────┴───────────────┴───────────────────────────────┤
-// │                         Source Address                        │
-// ├───────────────────────────────────────────────────────────────┤
-// │                      Destination Address                      │
-// ├───────────────────────────────────────────────┬───────────────┤
-// │                    Options                    │    Padding    │
-// └───────────────────────────────────────────────┴───────────────┘
-
-// IPV6
-// 0                   1                   2                   3
-// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// ┌───────┬───────────────┬───────────────────────────────────────┐
-// │Version│ Traffic Class │               Flow Label              │
-// ├───────┴───────────────┴───────┬───────────────┬───────────────┤
-// │         Payload Length        │  Next Header  │   Hop Limit   │
-// ├───────────────────────────────┴───────────────┴───────────────┤
-// │                                                               │
-// ├                                                               ┤
-// │                                                               │
-// ├                         Source Address                        ┤
-// │                                                               │
-// ├                                                               ┤
-// │                                                               │
-// ├───────────────────────────────────────────────────────────────┤
-// │                                                               │
-// ├                                                               ┤
-// │                                                               │
-// ├                       Destination Address                     ┤
-// │                                                               │
-// ├                                                               ┤
-// │                                                               │
-// └───────────────────────────────────────────────────────────────┘
-
-// #[repr(packed)]
-// #[derive(Copy, Clone)]
-// struct Parts {
-//     p1: u32,
-//     p2: u32,
-//     p3: u32,
-//     p4: u32,
-// }
-
-// #[repr(packed)]
-// union V6Addr {
-//     parts: Parts,
-//     addr: [u8; 16],
-// }
 
 const EFAULT: i64 = 14;
 

@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [profile.dev]
 opt-level = 3
-debug = false
+debug = true
 debug-assertions = false
 overflow-checks = false
 lto = true
@@ -31,3 +31,6 @@ codegen-units = 1
 
 [workspace]
 members = []
+
+[patch.crates-io]
+aya-ebpf-macros = { path = "../../temp-clones/aya/aya-ebpf-macros" }
