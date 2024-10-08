@@ -356,14 +356,12 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
         server.token(&mut send_buf[4..]);
 
         for (socket, remote_addr) in &clients {
-            tracing::info!("sending {counter} packet to {remote_addr}");
+            let local = socket.local_addr().unwrap();
+            tracing::info!("{counter} {local} -> {remote_addr}",);
 
             send_buf[..4].copy_from_slice(&counter.to_le_bytes());
             if let Err(err) = socket.send_to(&send_buf, remote_addr).await {
-                tracing::error!(
-                    "{:?} failed to send buffer to {remote_addr:?} - {err:#}",
-                    socket.local_addr().unwrap()
-                );
+                tracing::error!("{local} -> {remote_addr} - {err:#}");
                 continue;
             }
 
@@ -376,33 +374,23 @@ async fn run_tester(cfg: Config) -> anyhow::Result<()> {
                 Ok(res) => match res {
                     Ok((received, addr)) => {
                         if addr != *remote_addr {
-                            tracing::error!(
-                                "{:?} received a packet from an invalid remote peer {addr:?}",
-                                socket.local_addr().unwrap()
-                            );
+                            tracing::error!("{local} <- {addr} invalid remote peer");
                         }
 
                         if received != 4 {
-                            tracing::error!(
-                                "{:?} received packet of invalid length {received}",
-                                socket.local_addr().unwrap()
-                            );
+                            tracing::error!("{local} <- {addr} invalid length {received}");
                         } else if &recv_buf[..4] != &send_buf[..4] {
                             tracing::error!(
-                                "{:?} received invalid packet {:?}, expected {:?}",
-                                socket.local_addr().unwrap(),
+                                "{local} <- {addr}, expected {:?}, got {:?}",
+                                &send_buf[..4],
                                 &recv_buf[..4],
-                                &send_buf[..4]
                             );
                         }
 
                         tracing::info!("received {counter} packet from {addr}");
                     }
                     Err(err) => {
-                        tracing::error!(
-                            "recv_from failed for {:?} - {err:#}",
-                            socket.local_addr().unwrap()
-                        );
+                        tracing::error!("recv_from failed {local} - {err:#}",);
                     }
                 },
                 Err(_) => {
