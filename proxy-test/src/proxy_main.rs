@@ -231,9 +231,9 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     let _ipv6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, cfg.proxy.port))
         .context("failed to bind ipv6 socket");
 
-    let mut loader = aya::EbpfLoader::new();
+    let mut loader = aya::BpfLoader::new();
     //loader.btf(aya::Btf::from_sys_fs().ok().as_ref());
-    let tok_size = cfg.token_length as u64;
+    let tok_size = cfg.token_length as u16;
     loader.set_global("TOKEN_SIZE", &tok_size, true);
 
     let port = u16::to_be(cfg.proxy.port);
@@ -311,7 +311,7 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
 
     let program: &mut Xdp = bpf.program_mut("proxy").unwrap().try_into()?;
     program.load()?;
-    program.attach(&cfg.proxy.iface, XdpFlags::default())
+    program.attach(&cfg.proxy.iface, XdpFlags::SKB_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
     tracing::info!("Waiting for Ctrl-C...");

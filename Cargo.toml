@@ -9,3 +9,5 @@ members = [
 
 [patch.crates-io]
 aya = { path = "../temp-clones/aya/aya" }
+aya-log = { path = "../temp-clones/aya/aya-log" }
+#aya-log-common = { path = "../temp-clones/aya/aya-log-common" }

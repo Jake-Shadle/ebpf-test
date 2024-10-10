@@ -32,5 +32,5 @@ codegen-units = 1
 [workspace]
 members = []
 
-[patch.crates-io]
-aya-ebpf-macros = { path = "../../temp-clones/aya/aya-ebpf-macros" }
+# [patch.crates-io]
+# aya-ebpf-macros = { path = "../../temp-clones/aya/aya-ebpf-macros" }

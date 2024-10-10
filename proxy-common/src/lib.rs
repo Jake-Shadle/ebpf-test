@@ -19,6 +19,13 @@ pub struct SockAddr {
     pub port: u16,
 }
 
+impl SockAddr {
+    #[inline]
+    pub fn is_ipv6(&self) -> bool {
+        matches!(self.ip, IpAddr::V6(_))
+    }
+}
+
 impl core::hash::Hash for SockAddr {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.ip {
