@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use aya::programs::{Xdp, XdpFlags};
 use clap::Parser;
 use serde::{Deserialize, Deserializer};
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{Ipv6Addr, SocketAddr, ToSocketAddrs};
 use tokio::signal;
 
 #[derive(clap::Subcommand, Copy, Clone)]
@@ -50,6 +50,10 @@ fn iface() -> String {
     "enp5s0".into()
 }
 
+fn iface_tester() -> String {
+    "enp2s0".into()
+}
+
 #[derive(Deserialize)]
 struct ProxyConfig {
     #[serde(default = "iface")]
@@ -59,6 +63,8 @@ struct ProxyConfig {
 
 #[derive(Deserialize)]
 struct TesterConfig {
+    #[serde(default = "iface_tester")]
+    iface: String,
     proxy: Vec<Endpoint>,
 }
 
@@ -321,25 +327,35 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_tester(cfg: Config) -> anyhow::Result<()> {
+async fn run_tester(mut cfg: Config) -> anyhow::Result<()> {
     anyhow::ensure!(
         matches!(cfg.tester.proxy.len(), 1 | 2),
         "only 1 proxy endpoint (ipv4 and/or ipv6) is supported"
     );
+
+    for ep in &mut cfg.tester.proxy {
+        let std::net::SocketAddr::V6(addr) = ep.addr else {
+            continue;
+        };
+        ep.addr = (format!("{}%{}", addr.ip(), cfg.tester.iface), addr.port())
+            .to_socket_addrs()?
+            .next()
+            .context("failed to resolve IP")?;
+    }
 
     let mut clients = Vec::with_capacity(cfg.tester.proxy.len());
 
     for proxy in cfg.tester.proxy {
         if proxy.addr.is_ipv4() {
             clients.push((
-                tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+                tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 10000))
                     .await
                     .context("failed to bind ipv4 client socket")?,
                 proxy.addr,
             ));
         } else {
             clients.push((
-                tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, 0))
+                tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, 10001))
                     .await
                     .context("failed to bind ipv6 client socket")?,
                 proxy.addr,
