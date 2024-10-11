@@ -162,11 +162,13 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
             continue;
         }
 
-        let res = if dbg!(ip).is_ipv4() {
-            tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, ep.addr.port())).await
-        } else {
-            tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, ep.addr.port())).await
-        };
+        // let res = if dbg!(ip).is_ipv4() {
+        //     tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, ep.addr.port())).await
+        // } else {
+
+        // };
+
+        let res = tokio::net::UdpSocket::bind((ip, ep.addr.port())).await;
 
         let socket = res.with_context(|| format!("unable to bind {:?}", ep.addr))?;
         tracing::info!("bound {}", socket.local_addr().unwrap());
