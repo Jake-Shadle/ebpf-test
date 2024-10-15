@@ -152,18 +152,9 @@ async fn real_main() -> Result<(), anyhow::Error> {
 }
 
 async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let ipv4 = local_ip_address::local_ip().context("failed to get ipv4 address")?;
-    let ipv6 = local_ipv6().context("failed to get ipv6 address")?;
-
     let mut servers = Vec::new();
     for ep in &cfg.servers {
-        let ip = dbg!(ep.addr.ip());
-        if ip != ipv4 && ip != ipv6 {
-            tracing::debug!("address mismatch {ip} != {ipv6}");
-            continue;
-        }
-
-        let res = if dbg!(ip).is_ipv4() {
+        let res = if ep.addr.ip().is_ipv4() {
             tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, ep.addr.port())).await
         } else {
             tokio::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, ep.addr.port())).await
