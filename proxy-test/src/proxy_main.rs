@@ -224,20 +224,30 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
         .context("failed to bind ipv6 socket");
 
     let mut loader = aya::EbpfLoader::new();
-    //loader.btf(aya::Btf::from_sys_fs().ok().as_ref());
+
+    // Set the token length, this allows the eBPF program to know the amount
+    // of bytes to checksum to lookup destination servers, and how much to strip
+    // from those packets before they are forwarded
     let tok_size = cfg.token_length as u8;
     loader.set_global("TOKEN_SIZE", &tok_size, true);
 
+    // The external port that clients communicate with, if packets are sent
+    // to this port and there is no destination route match, we instead pass
+    // the packet up the stack
     let port = u16::to_be(cfg.proxy.port);
     loader.set_global("EXTERNAL_PORT", &port, true);
 
     let ipv4 = local_ip_address::local_ip().context("failed to get ipv4 address")?;
     let ipv6 = local_ipv6().context("failed to get ipv6 address")?;
 
+    // The network order IPv4 address we use as the source IP when forwarding
+    // IPv4 packets to either clients or servers
     let IpAddr::V4(v4) = ipv4 else { unreachable!() };
     let ipv4 = v4.to_bits().to_be();
     loader.set_global("SRC_IPV4", &ipv4, true);
 
+    // The IPv6 address we use as the source IP when forwarding IPv6 packets to
+    // either clients or servers
     let IpAddr::V6(v6) = ipv6 else { unreachable!() };
     let ipv6 = v6.octets();
     loader.set_global("SRC_IPV6", &ipv6, true);
@@ -258,6 +268,9 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
 
     let mut bpf = loader.load(&ebpf_byte_code)?;
 
+    // This inserts the available servers into the map. This would essentially
+    // be the majority of the work for the user space proxy if we were to change
+    // to eBPF
     let mut ep_map = aya::maps::HashMap::try_from(
         bpf.map_mut("TARGET_ENDPOINTS")
             .context("failed to retrieve TARGET_ENDPOINTS map")?,
@@ -290,6 +303,8 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
             .with_context(|| format!("failed to insert server endpoint: {:?}", ep.addr))?;
     }
 
+    // Simple queue of ports that can be assigned to unique client <-> server
+    // sessions. We would need to GC sessions and return ports in a real proxy.
     let mut q_map = aya::maps::Queue::try_from(
         bpf.map_mut("PORT_QUEUE")
             .context("failed to retrieve PORT_QUEUE map")?,
@@ -308,7 +323,7 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
 
     let program: &mut Xdp = bpf.program_mut("proxy").unwrap().try_into()?;
     program.load()?;
-    program.attach(&cfg.proxy.iface, XdpFlags::SKB_MODE)
+    program.attach(&cfg.proxy.iface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
     tracing::info!("Waiting for Ctrl-C...");

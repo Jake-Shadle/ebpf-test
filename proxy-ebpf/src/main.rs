@@ -38,14 +38,14 @@ const TOKEN_MAX: usize = 16;
 /// The port that clients send packets to, to be routed to the appropriate agent. Network order.
 #[no_mangle]
 static EXTERNAL_PORT: u16 = 0;
-/// The IPv6 address for this host. Network order.
+/// The IPv6 address for this host.
 #[no_mangle]
 static SRC_IPV6: [u8; 16] = [0u8; 16];
 /// The IPv4 address for this host. Network order.
 #[no_mangle]
 static SRC_IPV4: u32 = 0;
 /// The MAC address that client -> server packets are forwarded to. This is likely
-/// a router, as it _should_ work of the destination host is on the local network
+/// a router, as it _should_ work if the destination host is on the local network
 /// or an external one
 #[no_mangle]
 static DEST_MAC: [u8; 6] = [0u8; 6];
@@ -141,12 +141,18 @@ struct UdpCalc {
     pseudo: PseudoHdr,
 }
 
+/// Helper macro to read global variables
+///
+/// Due to how eBPF loaders (aya, bpftool etc) set globals, we unfortunately need
+/// to use read_volatile every time we access a static global, even though they are
+/// only ever set at program load
 macro_rules! read_global {
     ($name:ident) => {{
         unsafe { core::ptr::read_volatile(&$name) }
     }};
 }
 
+/// Temp helper macro
 macro_rules! ohno {
     ($ctx:expr, $func:expr) => {{
         let ret = $func;
@@ -159,10 +165,32 @@ macro_rules! ohno {
     }};
 }
 
+/// The core of the program
+///
+/// 1. Determines if the packet is possibly of interest to the proxy, ie. is an
+/// IPv4 or IPv6 UDP packet
+/// 2. Attempts to lookup an appropriate destination server if the packet is sent
+/// to the [`EXTERNAL_PORT`] that clients use, by looking up the address by computing
+/// a checksum of the token expected at the end of the packet data
+/// 3. If not sent to [`EXTERNAL_PORT`], determine if the packet is being sent to
+/// a port that has been assigned to that particular client -> server session, and
+/// if so forward that packet to that client
+///
+/// If a destination (client or server) is not determined, we `XDP_PASS` the packet
+/// up the network stack
+///
+/// Otherwise, we transform the packet, changing the destination IP/port to the
+/// new target, and changing the source IP this host and the source port to either
+/// the same [`EXTERNAL_PORT`] for sending packets to the client, or the unique
+/// port used for the client <-> server session so that we can identify the client
+/// to forward packets to when the server sends packets to this host on that port
+///
+/// Finally, the token is stripped from the packet if it is a client packet before
+/// being forwarded to the server
 fn try_proxy(ctx: XdpContext) -> Result<Action, ()> {
     let eth_hdr = unsafe { &mut *ptr_at::<EthHdr>(&ctx, 0)? };
 
-    // Pull the source address and the destination port, ignoring non-UDP traffic
+    // Pull the source address and the destination port, ignoring non-IPv4/IPv6 + UDP traffic
     let (src_addr, ip_hdr, udp_hdr) = unsafe {
         match eth_hdr.ether_type {
             EtherType::Ipv4 => {
@@ -787,9 +815,9 @@ unsafe fn rewrite_udp_hdr(
     Ok(())
 }
 
+/// Finalizes the checksum computation
 #[inline]
 fn fold_checksum(mut csum: u32) -> u16 {
-    // *sum = csum_fold(csum_add(diff, ~csum_unfold(*sum)));
     csum += 0xffff;
 
     csum = (csum & 0xffff) + (csum >> 16);
@@ -797,6 +825,7 @@ fn fold_checksum(mut csum: u32) -> u16 {
     !csum as u16
 }
 
+/// Computes the IPv4 header checksum
 #[inline]
 unsafe fn ipv4_l3_checksum(ip_hdr: &mut Ipv4Hdr) {
     // Just to be sure
