@@ -143,16 +143,11 @@ async fn real_main() -> Result<(), anyhow::Error> {
         toml::from_str(&toml).context("failed to parse config.toml")?
     };
 
-    let servers = spawn_servers(&cfg)
-        .await
-        .context("failed to spawn udp echo server(s)")?;
-
     match opt.cmd {
         Subcommand::Proxy => run_proxy(cfg).await?,
         Subcommand::Tester => run_tester(cfg).await?,
     }
 
-    servers.abort();
     Ok(())
 }
 
@@ -164,7 +159,7 @@ async fn spawn_servers(cfg: &Config) -> anyhow::Result<tokio::task::JoinHandle<(
     for ep in &cfg.servers {
         let ip = dbg!(ep.addr.ip());
         if ip != ipv4 && ip != ipv6 {
-            tracing::debug!("address mismatch {ip}");
+            tracing::debug!("address mismatch {ip} != {ipv6}");
             continue;
         }
 
@@ -237,9 +232,9 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     let _ipv6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, cfg.proxy.port))
         .context("failed to bind ipv6 socket");
 
-    let mut loader = aya::BpfLoader::new();
+    let mut loader = aya::EbpfLoader::new();
     //loader.btf(aya::Btf::from_sys_fs().ok().as_ref());
-    let tok_size = cfg.token_length as u16;
+    let tok_size = cfg.token_length as u8;
     loader.set_global("TOKEN_SIZE", &tok_size, true);
 
     let port = u16::to_be(cfg.proxy.port);
@@ -255,6 +250,11 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
     let IpAddr::V6(v6) = ipv6 else { unreachable!() };
     let ipv6 = v6.octets();
     loader.set_global("SRC_IPV6", &ipv6, true);
+
+    // TODO: Get the MAC address of the interfaces gateway/router, which is the
+    // MAC address we use when sending packets to a server, for now I'm just
+    // hardcoding mine
+    loader.set_global("DEST_MAC", &[0xc4u8, 0xea, 0x1d, 0xe3, 0x82, 0x4c], true);
 
     let path = if cfg!(debug_assertions) {
         "target/bpfel-unknown-none/debug/proxy"
@@ -310,7 +310,7 @@ async fn run_proxy(cfg: Config) -> anyhow::Result<()> {
             .with_context(|| format!("failed to push port: {port}"))?;
     }
 
-    if let Err(e) = aya_log::BpfLogger::init(&mut bpf) {
+    if let Err(e) = aya_log::EbpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         tracing::warn!("failed to initialize eBPF logger: {e}");
     }
@@ -342,6 +342,10 @@ async fn run_tester(mut cfg: Config) -> anyhow::Result<()> {
             .next()
             .context("failed to resolve IP")?;
     }
+
+    let servers = spawn_servers(&cfg)
+        .await
+        .context("failed to spawn udp echo server(s)")?;
 
     let mut clients = Vec::with_capacity(cfg.tester.proxy.len());
 
@@ -419,6 +423,7 @@ async fn run_tester(mut cfg: Config) -> anyhow::Result<()> {
     }
 
     tracing::info!("Exiting tester...");
+    servers.abort();
 
     Ok(())
 }
